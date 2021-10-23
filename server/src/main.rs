@@ -1,10 +1,26 @@
+#[macro_use]
+extern crate lazy_static;
+
 use failure::Error;
+use http::StatusCode;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, Server};
+use hyper::{Body, Method, Request, Response, Server};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use std::convert::Infallible;
-use std::io::Read;
 use std::net::SocketAddr;
+
+lazy_static! {
+    static ref DATA: Value =
+        serde_json::from_str(&std::fs::read_to_string("src/data.json").unwrap()).unwrap();
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Recipes {
+    recipe_names: Vec<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -15,7 +31,7 @@ async fn main() -> Result<(), Error> {
     // creates one from our `hello_world` function.
     let make_svc = make_service_fn(|_conn| async {
         // service_fn converts our function into a `Service`
-        Ok::<_, Infallible>(service_fn(hello_world))
+        Ok::<_, Infallible>(service_fn(recipe_api))
     });
 
     let server = Server::bind(&addr).serve(make_svc);
@@ -28,23 +44,36 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    // Data always exists so it's ok to unwrap only for this occasion
-    let recipes = load_data().unwrap();
-    println!("{}", &recipes);
+async fn recipe_api(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => Ok(Response::new("Hello, world!".into())),
+        (&Method::GET, "/recipes") => {
+            // println!("{}", DATA["recipes"]);
+            let mut recipes = Recipes {
+                recipe_names: vec![],
+            };
 
-    Ok(Response::new("Hello, World".into()))
-}
+            if let Value::Array(data) = &DATA["recipes"] {
+                for recipe in data {
+                    if let Value::String(name) = &recipe["name"] {
+                        recipes.recipe_names.push(name.to_string());
+                    }
+                }
+                // println!("{:?}", recipes);
+                // return Ok(Response::new(
+                //     (serde_json::to_string(&recipes).unwrap()).into(),
+                // ));
+                let body = serde_json::to_string(&recipes).unwrap().into();
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .body(body)
+                    .unwrap();
+                println!("{:?}", response);
+                return Ok(response);
+            }
 
-fn load_data() -> Result<serde_json::Value, Error> {
-    let mut data = String::new();
-    {
-        let stdin = std::io::stdin();
-        stdin.lock().read_to_string(&mut data)?;
+            Ok(Response::new("".into()))
+        }
+        _ => Ok(Response::new("Hello, world!".into())),
     }
-
-    let recipes: serde_json::Value = serde_json::from_str(&data)?;
-    eprintln!("{}", &recipes);
-
-    Ok(recipes)
 }
